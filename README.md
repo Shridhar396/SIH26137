@@ -159,4 +159,4 @@ Open **`http://127.0.0.1:5173`** in your browser.
 ---
 
 ## 📄 License
-MIT License • Built for Smart India Hackathon 2024-2025.
+MIT License • Built for Smart India Hackathon 2026-2027.
