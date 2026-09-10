@@ -83,20 +83,21 @@ In Sun et al.'s quantum delta potential well model, particles do not track veloc
 ```
 SIH26137/
 ├── backend/
-│   ├── api.py            # FastAPI endpoints & CORS configuration
-│   ├── graph_model.py    # Synthetic road network generator & Dijkstra APSP cache
-│   ├── qpso.py           # Quantum PSO engine with SPV and delta-well update
-│   ├── baselines.py      # Classical PSO, Genetic Algorithm, and Greedy NN
-│   ├── benchmark.py      # Multi-scale benchmark engine (10, 20, 30, 40 stops)
-│   ├── main.py           # Uvicorn launcher
-│   ├── requirements.txt  # Python package specifications
-│   └── test_algorithms.py# Automated unit test suite
+│   ├── api.py               # FastAPI endpoints & CORS configuration
+│   ├── graph_model.py       # OSM road network generator, curves & Dijkstra APSP cache
+│   ├── osm_network.graphml  # Cached OpenStreetMap road network with geo-coordinates
+│   ├── qpso.py              # Quantum PSO engine with SPV and delta-well update
+│   ├── baselines.py         # Classical PSO, Genetic Algorithm, and Greedy NN
+│   ├── benchmark.py         # Multi-scale benchmark engine (10, 20, 30, 40 stops)
+│   ├── main.py              # Uvicorn launcher
+│   ├── requirements.txt     # Python package specifications (fastapi, osmnx, networkx, etc.)
+│   └── test_algorithms.py   # Automated unit test suite
 ├── frontend/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── Navbar.jsx           # Controls, preset buttons, status indicators
 │   │   │   ├── ControlPanel.jsx     # Sliders, stop selector, live progress bar
-│   │   │   ├── GraphView.jsx        # SVG road network, congestion heatmap, route overlay
+│   │   │   ├── GraphView.jsx        # Leaflet Satellite & Street map, real curves, route overlay
 │   │   │   ├── ConvergenceChart.jsx # Interactive multi-line convergence chart
 │   │   │   ├── ResultsTable.jsx     # Sortable benchmark metrics & KPI cards
 │   │   │   ├── ScalabilityChart.jsx # Performance across 10/20/30/40 stops
@@ -105,8 +106,9 @@ SIH26137/
 │   │   └── index.css                # Dark quantum control-room design system
 │   ├── package.json
 │   └── vite.config.js
-├── run_app.bat           # 1-Click Windows Launcher
-├── run_app.sh            # 1-Click macOS/Linux Launcher
+├── .env.example             # Template for API keys (TomTom Live Traffic)
+├── run_app.bat              # 1-Click Windows Launcher
+├── run_app.sh               # 1-Click macOS/Linux Launcher
 └── README.md
 ```
 
@@ -117,6 +119,13 @@ SIH26137/
 ### Prerequisites
 - Python 3.10+
 - Node.js 18+ and npm
+
+### Configuration (Optional - for Live TomTom Traffic)
+Copy the example environment configuration:
+```bash
+cp .env.example .env
+# Edit .env and enter your TOMTOM_API_KEY if desired (offline mode works automatically without an API key!)
+```
 
 ### 1. One-Click Launch
 - **Windows**: Double-click `run_app.bat`

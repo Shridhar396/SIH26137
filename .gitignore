@@ -32,6 +32,15 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Environment variables & secrets
+.env
+.env.local
+*.env
+
+# Cache directories
+cache/
+.cache/
+
 # IDE & OS
 .vscode/
 .idea/
