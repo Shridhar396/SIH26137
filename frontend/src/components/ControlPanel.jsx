@@ -168,7 +168,7 @@ export default function ControlPanel({
         <div>
           <span className="text-xs font-semibold text-slate-300 block">Traffic Flow Simulation</span>
           <span className="text-[11px] text-slate-400">
-            {congestionMode === 'rush_hour' ? 'Severe bottleneck surges' : 'Normal arterial flow'}
+            {congestionMode === 'rush_hour' ? 'Severe bottleneck surges' : congestionMode === 'tomtom' ? 'Live traffic telemetry' : 'Normal arterial flow'}
           </span>
         </div>
         <button
@@ -177,10 +177,12 @@ export default function ControlPanel({
           className={`px-3 py-1.5 rounded-lg font-mono text-xs font-bold transition-all border ${
             congestionMode === 'rush_hour'
               ? 'bg-rose-500/20 border-rose-500 text-rose-300 shadow-sm shadow-rose-500/30'
+              : congestionMode === 'tomtom'
+              ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm shadow-amber-500/30'
               : 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
           }`}
         >
-          {congestionMode === 'rush_hour' ? 'RUSH HOUR' : 'NORMAL'}
+          {congestionMode === 'rush_hour' ? 'RUSH HOUR' : congestionMode === 'tomtom' ? 'LIVE TRAFFIC' : 'NORMAL'}
         </button>
       </div>
 

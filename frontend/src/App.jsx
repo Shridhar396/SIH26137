@@ -93,9 +93,12 @@ export default function App() {
     }
   };
 
-  // 3. Toggle Congestion Mode (Normal <-> Rush Hour)
+  // 3. Toggle Congestion Mode (Normal -> Rush Hour -> TomTom -> Normal)
   const handleToggleCongestion = async () => {
-    const nextMode = congestionMode === 'normal' ? 'rush_hour' : 'normal';
+    let nextMode = 'normal';
+    if (congestionMode === 'normal') nextMode = 'rush_hour';
+    else if (congestionMode === 'rush_hour') nextMode = 'tomtom';
+    
     setCongestionMode(nextMode);
     try {
       const res = await fetch(`${API_BASE}/api/update-congestion?mode=${nextMode}`, { method: 'POST' });
@@ -286,6 +289,7 @@ export default function App() {
               onToggleStop={handleToggleStop}
               bestRouteStops={optimizationData?.best_route_stops}
               detailedPathCoords={optimizationData?.detailed_path_coords}
+              detailedPathLatlons={optimizationData?.detailed_path_latlons}
               bestAlgorithm={optimizationData?.best_algorithm}
               congestionMode={congestionMode}
               isOptimizing={isOptimizing}

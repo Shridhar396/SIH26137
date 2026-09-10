@@ -8,7 +8,9 @@ import math
 import random
 import time
 from typing import Dict, List, Tuple, Any, Optional
+import os
 import networkx as nx
+import osmnx as ox
 
 
 class CityNetwork:
@@ -37,19 +39,23 @@ class CityNetwork:
         self.nodes_data: Dict[int, Dict[str, Any]] = {}
         self.edges_data: List[Dict[str, Any]] = []
         
-        # APSP (All-Pairs Shortest Path) cache: (mode, seed, num_nodes) -> dist_matrix, path_matrix
-        self._apsp_cache: Dict[str, Tuple[Dict[Tuple[int, int], float], Dict[Tuple[int, int], List[int]]]] = {}
         
         self.generate_network()
 
     def generate_network(self):
-        """Generates grid topology + cross-arterial shortcuts + node demands."""
+        """Generates grid topology or loads offline OSM network."""
         if self.seed is not None:
             random.seed(self.seed)
 
         self.graph.clear()
         self.nodes_data.clear()
         self.edges_data.clear()
+
+        osm_path = "backend/osm_network.graphml"
+        if os.path.exists(osm_path):
+            self._load_osm_network(osm_path)
+            self.update_congestion(self.congestion_mode)
+            return
 
         # Calculate grid dimensions (e.g. 36 -> 6x6, 40 -> 5x8, 48 -> 6x8)
         cols = int(math.ceil(math.sqrt(self.num_nodes)))
@@ -151,6 +157,126 @@ class CityNetwork:
         # Compute initial edge costs and invalidate APSP cache
         self.update_congestion(self.congestion_mode)
 
+    def _load_osm_network(self, filepath: str):
+        """Loads a projected OSMnx graph and normalizes its coordinates."""
+        G = ox.load_graphml(filepath)
+        
+        # 1. Normalize coordinates
+        xs = [data['x'] for _, data in G.nodes(data=True)]
+        ys = [data['y'] for _, data in G.nodes(data=True)]
+        min_x = min(xs)
+        min_y = min(ys)
+        
+        node_mapping = {}
+        # Make depot the node closest to the center
+        cx, cy = sum(xs)/len(xs), sum(ys)/len(ys)
+        
+        # Sort nodes by distance to center so index 0 is depot
+        nodes_sorted = sorted(G.nodes(data=True), key=lambda item: math.hypot(float(item[1]['x']) - cx, float(item[1]['y']) - cy))
+        
+        for i, (osmid, data) in enumerate(nodes_sorted):
+            node_mapping[osmid] = i
+            # Normalize to start at 0,0
+            nx_x = round(float(data['x']) - min_x, 1)
+            nx_y = round(float(data['y']) - min_y, 1)
+            
+            demand = 0 if i == 0 else random.randint(1, 10)
+            
+            self.nodes_data[i] = {
+                "id": i,
+                "x": nx_x,
+                "y": nx_y,
+                "lat": float(data.get('lat', 0.0)),
+                "lon": float(data.get('lon', 0.0)),
+                "name": f"Station {i:02d}" if i == 0 else f"Node {i:02d}",
+                "is_depot": (i == 0),
+                "zone": "City Node",
+                "demand": demand,
+            }
+            self.graph.add_node(i, **self.nodes_data[i])
+            
+        self.num_nodes = len(self.nodes_data)
+        
+        # 2. Add edges
+        for u, v, data in G.edges(data=True):
+            uid = node_mapping[u]
+            vid = node_mapping[v]
+            
+            if self.graph.has_edge(uid, vid):
+                continue
+                
+            dist = float(data.get('length', 0.0))
+            if dist == 0.0:
+                dist = math.hypot(self.nodes_data[uid]['x'] - self.nodes_data[vid]['x'], 
+                                  self.nodes_data[uid]['y'] - self.nodes_data[vid]['y'])
+                                  
+            highway = str(data.get('highway', ''))
+            is_arterial = 'primary' in highway or 'trunk' in highway or 'secondary' in highway
+            
+            try:
+                maxspeed_val = data.get('maxspeed', 60.0 if is_arterial else 35.0)
+                if isinstance(maxspeed_val, str):
+                    import ast
+                    try:
+                        parsed = ast.literal_eval(maxspeed_val)
+                        if isinstance(parsed, list): maxspeed_val = float(parsed[0])
+                        else: maxspeed_val = float(parsed)
+                    except:
+                        maxspeed_val = float(maxspeed_val.replace(' km/h', '').replace(' mph', ''))
+                speed_limit = float(maxspeed_val)
+            except:
+                speed_limit = 60.0 if is_arterial else 35.0
+            
+            base_congestion = random.uniform(0.1, 0.4)
+            rush_congestion = min(0.95, base_congestion + (0.4 if is_arterial else 0.2))
+            
+            geom = data.get('geometry')
+            geometry_coords = []
+            if geom:
+                try:
+                    geometry_coords = [[lat, lon] for lon, lat in geom.coords]
+                except Exception:
+                    pass
+            
+            edge_info = {
+                "u": min(uid, vid),
+                "v": max(uid, vid),
+                "distance": round(dist, 1),
+                "speed_limit": speed_limit,
+                "is_arterial": is_arterial,
+                "congestion_normal": round(base_congestion, 3),
+                "congestion_rush_hour": round(rush_congestion, 3),
+                "current_congestion": round(base_congestion, 3),
+                "travel_time": 0.0,
+                "cost": 0.0,
+                "geometry": geometry_coords,
+            }
+            self.edges_data.append(edge_info)
+            self.graph.add_edge(uid, vid, **edge_info)
+            
+        # Ensure graph is fully connected
+        if not nx.is_connected(self.graph):
+            components = list(nx.connected_components(self.graph))
+            for i in range(len(components) - 1):
+                u = next(iter(components[i]))
+                v = next(iter(components[i + 1]))
+                dist = math.hypot(self.nodes_data[u]['x'] - self.nodes_data[v]['x'], 
+                                  self.nodes_data[u]['y'] - self.nodes_data[v]['y'])
+                edge_info = {
+                    "u": min(u, v),
+                    "v": max(u, v),
+                    "distance": round(dist, 1),
+                    "speed_limit": 35.0,
+                    "is_arterial": False,
+                    "congestion_normal": 0.1,
+                    "congestion_rush_hour": 0.2,
+                    "current_congestion": 0.1,
+                    "travel_time": 0.0,
+                    "cost": 0.0,
+                }
+                self.edges_data.append(edge_info)
+                self.graph.add_edge(u, v, **edge_info)
+
     def _add_road_edge(self, u: int, v: int, is_arterial: bool = False):
         """Creates a bidirectional edge with base physical attributes."""
         x1, y1 = self.nodes_data[u]["x"], self.nodes_data[u]["y"]
@@ -232,39 +358,94 @@ class CityNetwork:
             self.graph[u][v]["current_congestion"] = cong
             self.graph[u][v]["travel_time"] = travel_time
 
-        # Invalidate or recompute cached APSP
-        self._compute_apsp()
-
-    def _compute_apsp(self):
-        """Precomputes and caches All-Pairs Shortest Path using Dijkstra weighted by 'cost'."""
-        cache_key = f"{self.congestion_mode}_{self.seed}_{self.num_nodes}"
+    def update_tomtom_congestion(self, api_key: str):
+        """Fetches live traffic incidents from TomTom and applies them to the network."""
+        import urllib.request
+        import json
         
-        # We compute Dijkstra shortest paths between all node pairs
-        lengths = dict(nx.all_pairs_dijkstra_path_length(self.graph, weight="cost"))
-        paths = dict(nx.all_pairs_dijkstra_path(self.graph, weight="cost"))
+        # Get bounding box
+        lats = [n["lat"] for n in self.nodes_data.values() if n.get("lat")]
+        lons = [n["lon"] for n in self.nodes_data.values() if n.get("lon")]
         
-        dist_dict: Dict[Tuple[int, int], float] = {}
-        path_dict: Dict[Tuple[int, int], List[int]] = {}
-
-        for u in self.graph.nodes():
-            for v in self.graph.nodes():
-                dist_dict[(u, v)] = lengths[u][v]
-                path_dict[(u, v)] = paths[u][v]
-
-        self._apsp_cache[cache_key] = (dist_dict, path_dict)
+        if not lats or not lons:
+            return  # Can't use TomTom without lat/lon
+            
+        min_lat, max_lat = min(lats), max(lats)
+        min_lon, max_lon = min(lons), max(lons)
+        
+        # Add 0.005 padding (~500m)
+        bbox = f"{min_lon-0.005},{min_lat-0.005},{max_lon+0.005},{max_lat+0.005}"
+        
+        url = f"https://api.tomtom.com/traffic/services/5/incidentDetails?key={api_key}&bbox={bbox}&fields={{incidents{{geometry{{coordinates}},properties{{magnitudeOfDelay,delay}}}}}}"
+        
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'QuantumRoute/1.0'})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode())
+                
+            incidents = data.get("incidents", [])
+            
+            # Reset congestion to base before applying live traffic
+            for edge in self.edges_data:
+                edge["current_congestion"] = edge["congestion_normal"]
+                
+            affected_nodes = set()
+            
+            for inc in incidents:
+                coords = inc.get("geometry", {}).get("coordinates", [])
+                delay_mag = inc.get("properties", {}).get("magnitudeOfDelay", 1) # 0=unknown, 1=minor, 2=moderate, 3=major, 4=undefined
+                
+                # Boost based on magnitude
+                boost = 0.2 if delay_mag == 1 else 0.5 if delay_mag == 2 else 0.8
+                
+                for pt in coords:
+                    inc_lon, inc_lat = pt[0], pt[1]
+                    for n_id, n_data in self.nodes_data.items():
+                        # Simple Euclidean distance in degrees; 0.001 is ~100m
+                        if abs(n_data["lat"] - inc_lat) < 0.001 and abs(n_data["lon"] - inc_lon) < 0.001:
+                            affected_nodes.add((n_id, boost))
+                            
+            # Apply to edges
+            for n_id, boost in affected_nodes:
+                for edge in self.edges_data:
+                    if edge["u"] == n_id or edge["v"] == n_id:
+                        new_cong = min(0.98, edge["current_congestion"] + boost)
+                        edge["current_congestion"] = round(new_cong, 3)
+                        
+            # Recompute effective speed, travel time and cost
+            for edge in self.edges_data:
+                cong = edge["current_congestion"]
+                effective_speed = max(8.0, edge["speed_limit"] * (1.0 - 0.75 * cong))
+                travel_time = round((edge["distance"] / effective_speed) * 60.0, 2)
+                edge["travel_time"] = travel_time
+                
+                dist_term = edge["distance"] * 0.5
+                time_term = travel_time * 1.5
+                cong_term = (cong ** 1.8) * 150.0
+                
+                cost = round(self.alpha * dist_term + self.beta * time_term + self.gamma * cong_term, 2)
+                edge["cost"] = cost
+                
+                u, v = edge["u"], edge["v"]
+                self.graph[u][v]["cost"] = cost
+                self.graph[u][v]["current_congestion"] = cong
+                self.graph[u][v]["travel_time"] = travel_time
+                
+            self.congestion_mode = "tomtom_live"
+            
+        except Exception as e:
+            print(f"TomTom API failed: {e}. Falling back to simulated mode.")
+            self.update_congestion("normal")
 
     def get_shortest_leg(self, u: int, v: int) -> Tuple[float, List[int], float, float]:
         """
         Returns (leg_cost, path_of_node_ids, leg_distance, leg_time) between any two nodes.
-        Uses cached Dijkstra paths.
+        Computes single-source Dijkstra lazily.
         """
-        cache_key = f"{self.congestion_mode}_{self.seed}_{self.num_nodes}"
-        if cache_key not in self._apsp_cache:
-            self._compute_apsp()
-
-        dist_dict, path_dict = self._apsp_cache[cache_key]
-        leg_cost = dist_dict.get((u, v), 0.0)
-        path = path_dict.get((u, v), [u, v])
+        try:
+            leg_cost, path = nx.single_source_dijkstra(self.graph, u, target=v, weight="cost")
+        except nx.NetworkXNoPath:
+            return float('inf'), [u, v], 0.0, 0.0
 
         # Calculate exact distance and travel time along path
         total_dist = 0.0
@@ -280,24 +461,21 @@ class CityNetwork:
     def get_cost_matrix(self, stop_nodes: List[int]) -> Tuple[List[List[float]], Dict[Tuple[int, int], List[int]]]:
         """
         Returns a square cost matrix for the subset of stop nodes (including start/depot).
-        Used by optimization algorithms (QPSO, PSO, GA) for instant O(1) leg lookup.
+        Used by optimization algorithms for instant O(1) leg lookup.
+        Computes single-source Dijkstra lazily for each stop node.
         """
-        cache_key = f"{self.congestion_mode}_{self.seed}_{self.num_nodes}"
-        if cache_key not in self._apsp_cache:
-            self._compute_apsp()
-        dist_dict, path_dict = self._apsp_cache[cache_key]
-
         n = len(stop_nodes)
         matrix = [[0.0] * n for _ in range(n)]
         legs: Dict[Tuple[int, int], List[int]] = {}
 
         for i in range(n):
             u = stop_nodes[i]
+            lengths, paths = nx.single_source_dijkstra(self.graph, u, weight="cost")
             for j in range(n):
                 v = stop_nodes[j]
                 if i != j:
-                    matrix[i][j] = dist_dict.get((u, v), float('inf'))
-                    legs[(u, v)] = path_dict.get((u, v), [u, v])
+                    matrix[i][j] = lengths.get(v, float('inf'))
+                    legs[(u, v)] = paths.get(v, [u, v])
                 else:
                     matrix[i][j] = 0.0
                     legs[(u, v)] = [u]

@@ -11,6 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any
 import time
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from backend.graph_model import CityNetwork
 from backend.qpso import QPSOOptimizer
@@ -42,7 +46,7 @@ cached_benchmark_results: Dict[str, Any] = {}
 # Pydantic Request Models
 class GenerateNetworkRequest(BaseModel):
     num_nodes: int = Field(default=36, ge=20, le=64)
-    congestion_mode: str = Field(default="normal", pattern="^(normal|rush_hour)$")
+    congestion_mode: str = Field(default="normal", pattern="^(normal|rush_hour|tomtom)$")
     seed: Optional[int] = 42
 
 
@@ -79,9 +83,15 @@ def generate_network(req: GenerateNetworkRequest):
 
 
 @app.post("/api/update-congestion")
-def update_congestion(mode: str = Query(..., pattern="^(normal|rush_hour)$")):
+def update_congestion(mode: str = Query(..., pattern="^(normal|rush_hour|tomtom)$")):
     global current_network
-    current_network.update_congestion(mode)
+    if mode == "tomtom":
+        api_key = os.getenv("TOMTOM_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="TOMTOM_API_KEY not configured in .env file")
+        current_network.update_tomtom_congestion(api_key)
+    else:
+        current_network.update_congestion(mode)
     return current_network.to_dict()
 
 
@@ -91,7 +101,13 @@ def optimize_route(req: OptimizeRequest):
 
     # If congestion mode changed in optimize request, update it
     if req.congestion_mode and req.congestion_mode != current_network.congestion_mode:
-        current_network.update_congestion(req.congestion_mode)
+        if req.congestion_mode == "tomtom":
+            api_key = os.getenv("TOMTOM_API_KEY")
+            if not api_key:
+                raise HTTPException(status_code=500, detail="TOMTOM_API_KEY not configured in .env file")
+            current_network.update_tomtom_congestion(api_key)
+        else:
+            current_network.update_congestion(req.congestion_mode)
 
     # Validate stop nodes
     valid_nodes = set(current_network.nodes_data.keys())
@@ -190,9 +206,17 @@ def optimize_route(req: OptimizeRequest):
 
     # Compute detailed node-by-node path through intermediate road intersections for the best route
     detailed_path_coords: List[List[float]] = []
+    detailed_path_latlons: List[List[float]] = []
     detailed_path_node_ids: List[int] = []
     total_physical_distance = 0.0
     total_travel_time = 0.0
+
+    # Start with the first node
+    first_node = current_network.nodes_data[winner_route[0]]
+    if "lat" in first_node and "lon" in first_node and first_node["lat"] != 0.0:
+        detailed_path_latlons.append([first_node["lat"], first_node["lon"]])
+    else:
+        detailed_path_coords.append([first_node["x"], first_node["y"]])
 
     for i in range(len(winner_route) - 1):
         u, v = winner_route[i], winner_route[i + 1]
@@ -200,11 +224,33 @@ def optimize_route(req: OptimizeRequest):
         total_physical_distance += leg_dist
         total_travel_time += leg_time
 
-        for p_idx, node_id in enumerate(path_nodes):
-            if not detailed_path_node_ids or detailed_path_node_ids[-1] != node_id:
-                detailed_path_node_ids.append(node_id)
-                n_info = current_network.nodes_data[node_id]
-                detailed_path_coords.append([n_info["x"], n_info["y"]])
+        for p_idx in range(len(path_nodes) - 1):
+            nu, nv = path_nodes[p_idx], path_nodes[p_idx + 1]
+            if not detailed_path_node_ids or detailed_path_node_ids[-1] != nu:
+                detailed_path_node_ids.append(nu)
+            
+            edge_data = current_network.graph[nu][nv]
+            if "geometry" in edge_data and edge_data["geometry"]:
+                geom = edge_data["geometry"]
+                nu_data = current_network.nodes_data[nu]
+                
+                # Check if geom needs to be reversed (if first point is closer to nv than nu)
+                dist_to_nu = (geom[0][0] - nu_data.get("lat", 0))**2 + (geom[0][1] - nu_data.get("lon", 0))**2
+                dist_to_nv = (geom[-1][0] - nu_data.get("lat", 0))**2 + (geom[-1][1] - nu_data.get("lon", 0))**2
+                
+                # Use geometry points directly
+                points = geom if dist_to_nu <= dist_to_nv else list(reversed(geom))
+                for pt in points:
+                    detailed_path_latlons.append(pt)
+            else:
+                # Fallback to straight line to the next node
+                nv_data = current_network.nodes_data[nv]
+                if "lat" in nv_data and "lon" in nv_data and nv_data["lat"] != 0.0:
+                    detailed_path_latlons.append([nv_data["lat"], nv_data["lon"]])
+                else:
+                    detailed_path_coords.append([nv_data["x"], nv_data["y"]])
+            
+            detailed_path_node_ids.append(nv)
 
     return {
         "results": results,
@@ -213,6 +259,7 @@ def optimize_route(req: OptimizeRequest):
         "best_route_stops": winner_route,
         "detailed_path_node_ids": detailed_path_node_ids,
         "detailed_path_coords": detailed_path_coords,
+        "detailed_path_latlons": detailed_path_latlons,
         "total_physical_distance": round(total_physical_distance, 1),
         "total_travel_time_min": round(total_travel_time, 1),
         "total_stops_visited": len(cleaned_stops),

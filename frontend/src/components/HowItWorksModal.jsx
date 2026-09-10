@@ -97,7 +97,7 @@ export default function HowItWorksModal({ isOpen, onClose }) {
             </div>
 
             <p className="text-slate-300 text-xs">
-              <strong>Quantum Tunneling Effect:</strong> Because the probability density function has non-zero tails across the entire state space, QPSO particles can tunnel across high cost barriers to discover globally superior delivery routes.
+              <strong>Quantum Tunneling Effect:</strong> Because the probability density function has non-zero tails across the entire state space, QPSO particles can tunnel across high cost barriers. However, blind continuous search can struggle with the strict combinatorial structure of VRPs compared to GA's direct permutation mutations. We fix this by hybridizing QPSO with a 2-opt local search polish on the global best, combining quantum tunneling with structured permutation improvements.
             </p>
           </div>
 

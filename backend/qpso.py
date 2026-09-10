@@ -57,8 +57,12 @@ class QPSOOptimizer:
         self.start_node = start_node  # Depot
         self.demands = demands        # Node id -> demand (1..10)
         self.vehicle_capacity = vehicle_capacity
-        self.num_particles = num_particles
-        self.max_iterations = max_iterations
+        
+        # Scale with problem size (roughly 2*D particles, 6*D iterations, bounded)
+        D = len(stop_nodes)
+        self.num_particles = min(100, max(30, 2 * D)) if num_particles == 30 else num_particles
+        self.max_iterations = min(400, max(80, 6 * D)) if max_iterations == 80 else max_iterations
+        
         self.alpha_start = alpha_start
         self.alpha_end = alpha_end
         self.penalty_weight = capacity_penalty_weight
@@ -135,6 +139,44 @@ class QPSOOptimizer:
         order_indices = np.argsort(continuous_vector)
         return [self.stop_nodes[i] for i in order_indices]
 
+    def spv_encode(self, permutation: List[int]) -> np.ndarray:
+        """
+        Inverse SPV rule: Maps a discrete permutation back to continuous space
+        so the swarm can inherit heuristically found solutions.
+        """
+        D = len(permutation)
+        continuous = np.zeros(D)
+        # Evenly space values from -4.0 to 4.0
+        sorted_vals = np.linspace(-4.0, 4.0, D)
+        for i, stop in enumerate(permutation):
+            idx = self.stop_nodes.index(stop)
+            continuous[idx] = sorted_vals[i]
+        return continuous
+
+    def two_opt(self, permutation: List[int]) -> List[int]:
+        """
+        Local search: greedily reverses contiguous segments to find a lower-cost route.
+        """
+        best_route = list(permutation)
+        best_cost, _, _ = self.evaluate_fitness(best_route)
+        
+        improved = True
+        while improved:
+            improved = False
+            for i in range(len(best_route) - 1):
+                for j in range(i + 2, len(best_route) + 1):
+                    # Reverse segment i to j-1
+                    new_route = best_route[:i] + best_route[i:j][::-1] + best_route[j:]
+                    new_cost, _, _ = self.evaluate_fitness(new_route)
+                    if new_cost < best_cost:
+                        best_cost = new_cost
+                        best_route = new_route
+                        improved = True
+                        break # Greedily accept first improvement
+                if improved:
+                    break
+        return best_route
+
     def optimize(self) -> Dict[str, Any]:
         """
         Executes Quantum Particle Swarm Optimization.
@@ -169,6 +211,24 @@ class QPSOOptimizer:
 
         # Initialize Swarm: Continuous position vectors in [-4.0, 4.0]
         X = np.random.uniform(-4.0, 4.0, size=(M, D))
+        
+        # Greedy-seeded initialization for the first particle
+        unvisited = set(self.stop_nodes)
+        if self.start_node in unvisited:
+            unvisited.remove(self.start_node)
+        
+        greedy_route = []
+        current = self.start_node
+        while unvisited:
+            curr_idx = self.node_to_idx[current]
+            next_node = min(unvisited, key=lambda n: self.cost_matrix[curr_idx][self.node_to_idx[n]])
+            greedy_route.append(next_node)
+            unvisited.remove(next_node)
+            current = next_node
+            
+        # Seed the first particle with the greedy route
+        if len(greedy_route) == D:
+            X[0] = self.spv_encode(greedy_route)
         
         # Personal best positions (P) and personal best fitness values (pbest_fit)
         P = np.copy(X)
@@ -238,7 +298,32 @@ class QPSOOptimizer:
                         gbest_pos = np.copy(X[i])
                         gbest_trips = trips
 
+            # 2-opt polish on the global best every 10 iterations
+            if it % 10 == 0:
+                best_perm = self.spv_decode(gbest_pos)
+                polished_perm = self.two_opt(best_perm)
+                polished_fit, polished_trips, _ = self.evaluate_fitness(polished_perm)
+                
+                if polished_fit < gbest_fit:
+                    gbest_fit = polished_fit
+                    gbest_pos = self.spv_encode(polished_perm)
+                    gbest_trips = polished_trips
+                    
+                    # Distribute improved global best to the worst particle to avoid stagnation
+                    worst_idx = np.argmax(pbest_fit)
+                    X[worst_idx] = np.copy(gbest_pos)
+                    pbest_fit[worst_idx] = gbest_fit
+                    P[worst_idx] = np.copy(gbest_pos)
+
             convergence_history.append(round(gbest_fit, 2))
+
+        # Final 2-opt pass before returning
+        best_perm = self.spv_decode(gbest_pos)
+        final_perm = self.two_opt(best_perm)
+        final_fit, final_trips, final_raw_cost = self.evaluate_fitness(final_perm)
+        if final_fit < gbest_fit:
+            gbest_fit = final_fit
+            gbest_trips = final_trips
 
         elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
 

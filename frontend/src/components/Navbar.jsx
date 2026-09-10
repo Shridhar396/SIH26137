@@ -84,8 +84,8 @@ export default function Navbar({
             }`}
             title="Toggle between Normal flow and Peak Rush-Hour traffic surge"
           >
-            <Flame className={`w-3.5 h-3.5 ${congestionMode === 'rush_hour' ? 'text-rose-400 animate-bounce' : 'text-emerald-400'}`} />
-            <span>{congestionMode === 'rush_hour' ? 'Rush Hour (Active)' : 'Normal Flow'}</span>
+            <Flame className={`w-3.5 h-3.5 ${congestionMode === 'rush_hour' ? 'text-rose-400 animate-bounce' : congestionMode === 'tomtom' ? 'text-amber-400 animate-pulse' : 'text-emerald-400'}`} />
+            <span>{congestionMode === 'rush_hour' ? 'Rush Hour (Active)' : congestionMode === 'tomtom' ? 'Live TomTom Traffic' : 'Normal Flow'}</span>
           </button>
 
           {/* Theory / Math explanation */}

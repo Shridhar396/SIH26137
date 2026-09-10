@@ -303,13 +303,29 @@ export default function ConvergenceChart({ results, bestKnownProxy }) {
         )}
       </div>
 
-      {/* Quantum Advantage Insight Note */}
-      <div className="flex items-start gap-2 p-2.5 rounded-lg bg-cyan-950/30 border border-cyan-500/20 text-xs text-cyan-200/90 font-mono">
-        <Zap className="w-4 h-4 text-cyan-400 flex-shrink-0 mt-0.5" />
-        <div>
-          <strong className="text-cyan-300">Quantum Delta-Potential Well Advantage:</strong> QPSO particles tunnel out of premature local minima traps that stall Classical PSO, reaching lower route costs with steeper early convergence gradients.
-        </div>
-      </div>
+      {/* Advantage Insight Note */}
+      {series.length > 0 && (() => {
+        const sortedSeries = [...series].sort((a, b) => a.finalCost - b.finalCost);
+        const winner = sortedSeries[0];
+        const runnerUp = sortedSeries.length > 1 ? sortedSeries[1] : null;
+        const gap = runnerUp ? (((runnerUp.finalCost - winner.finalCost) / winner.finalCost) * 100).toFixed(1) : 0;
+        const isQpsowinner = winner.key === 'qpso';
+        
+        return (
+          <div className={`flex items-start gap-2 p-2.5 rounded-lg ${isQpsowinner ? 'bg-cyan-950/30 border-cyan-500/20 text-cyan-200/90' : 'bg-purple-950/30 border-purple-500/20 text-purple-200/90'} border text-xs font-mono`}>
+            <Zap className={`w-4 h-4 ${isQpsowinner ? 'text-cyan-400' : 'text-purple-400'} flex-shrink-0 mt-0.5`} />
+            <div>
+              <strong className={isQpsowinner ? 'text-cyan-300' : 'text-purple-300'}>
+                {isQpsowinner ? 'Quantum Advantage Confirmed: ' : `${winner.label} Advantage: `}
+              </strong>
+              {isQpsowinner 
+                ? `QPSO particles tunnel out of premature local minima traps, reaching lower route costs with steeper early convergence gradients (beating runner-up by ${gap}%).`
+                : `${winner.label} achieved a ${gap}% lower cost than the runner-up. QPSO's continuous quantum jumps struggled to match ${winner.label}'s explicit permutation-space local search on this topology.`
+              }
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
